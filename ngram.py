@@ -26,7 +26,8 @@ def sample_kernels(kernels, sample_count):
 
 def profile_kernel(command, kernel, skip):
     import csv, io, subprocess
-    ncu_command = ["ncu", "--csv", "--target-process", "all", "--kernel-name", str(kernel), "--launch-skip", str(skip), "--launch-count", "1"] + command
+    ncu_command = ["ncu", "--csv", "--target-process", "all", "--kernel-name", str(kernel),
+         "--launch-skip", str(skip), "--launch-count", "1"] + command
     raw_result = subprocess.check_output(ncu_command).decode("utf-8")
     result = raw_result[raw_result.index("\"ID\""):]
     string_stream = io.StringIO(result)
@@ -35,23 +36,41 @@ def profile_kernel(command, kernel, skip):
     for row in csv_reader:
         if row["Section Name"] == "GPU Speed Of Light":
             if row["Metric Name"] == "Memory [%]":
-                measure = (row["Metric Value"], measure[1])
+                measure = (float(row["Metric Value"]), measure[1])
             elif row["Metric Name"] == "SM [%]":
-                measure = (measure[0], row["Metric Value"])
+                measure = (measure[0], float(row["Metric Value"]))
     return measure
+
+def visualize_profile(dest, time, memory, sm):
+    import pandas
+    from plotnine import ggplot, aes, geom_smooth, labs, theme_minimal
+    stats = pandas.DataFrame.from_records(zip(time, memory, sm),
+         columns=["Time", "Memory", "SM"]).melt(id_vars=["Time"],
+         value_vars=["Memory", "SM"],
+         var_name="Metrics",
+         value_name="Utils")
+    vis = (ggplot(stats, aes(x="Time", y="Utils", color="Metrics")) +
+        geom_smooth() +
+        labs(x="Time (s)", y="Utilization (%)",
+            title="Hardware utilization by time") +
+        theme_minimal())
+    vis.save(dest + ".pdf")
 
 if __name__ == "__main__":
     import argparse, csv
     parser = argparse.ArgumentParser()
-    parser.add_argument("command", nargs="*")
-    parser.add_argument("-o", "--output", default="record.csv")
-    parser.add_argument("-s", "--sample_count", default=10, type=int)
+    parser.add_argument("command", nargs="*", help="command to run the target model")
+    parser.add_argument("-o", "--output", default="record", help="path of output file")
+    parser.add_argument("-s", "--sample_count", default=10, type=int, help="number of timestamps to be sampled")
+    parser.add_argument("-g", "--graph", action="store_true", help="generate the plot for the statistics")
     args = parser.parse_args()
     kernels = load_kernels(args.command)
     sample_times, sample_kernels = sample_kernels(kernels, args.sample_count)
     memory, sm = zip(*[profile_kernel(args.command, k[0], k[1]) for k in sample_kernels])
-    with open(args.output, "w", newline="") as helicorder:
+    if args.graph:
+        visualize_profile(args.output, sample_times, memory, sm)
+    with open(args.output + ".csv", "w", newline="") as helicorder:
         csv_writer = csv.writer(helicorder)
-        csv_writer.writerow(("Timestamp (s)", "Memory (%)", "SM (%)"))
+        csv_writer.writerow(("Time (s)", "Memory (%)", "SM (%)"))
         for row in zip(sample_times, memory, sm):
             csv_writer.writerow(row)
